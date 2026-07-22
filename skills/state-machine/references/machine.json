@@ -1,0 +1,10 @@
+{
+  "initial": "idle",
+  "states": {
+    "idle":     { "CREATE": "creating" },
+    "creating": { "CREATED": "waiting", "FAILURE": "failed" },
+    "waiting":  { "SUCCESS": "success", "FAILURE": "failed" },
+    "failed":   { "RETRY": "creating", "RESET": "idle" },
+    "success":  { "RESET": "idle" }
+  }
+}
