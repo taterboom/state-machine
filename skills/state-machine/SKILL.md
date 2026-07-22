@@ -15,8 +15,8 @@ description: >
 
 一个让爬虫 / 数据处理 / 轮询类小脚本**长期可读**的三层模式:声明式状态定义(纯数据)+ 纯转移引擎 + 可视化观察层。时间久了回头看,一张状态图 + 一行 trail 就能看懂整个脚本在干什么。
 
-参考实现见 [`references/`](references/):四文件结构 ——
-`machine.json`(纯数据定义)、`machine-runtime.ts`(转移引擎)、`log.ts`(观察层 + `render()`)、`main.ts`(用法)。
+参考实现见 [`references/`](references/):只有两个引擎文件 + 一个用例 ——
+`machine.json`(纯数据定义)、`machine-runtime.ts`(转移引擎 + 观察层/`render()` 合一)、`main.ts`(直接可用的用法)。
 那是**形态参考**,不是要求用 TypeScript。核心是 **machine 定义永远是纯数据(独立的 `machine.json`)**,不要把它内联进代码。
 
 ---
@@ -40,7 +40,7 @@ description: >
 
 ## 第 1 步:选语言
 
-读用户的项目和需求,选**最贴合的语言**,照 `references/` 的四文件结构翻译。常见映射:
+读用户的项目和需求,选**最贴合的语言**,照 `references/` 的结构翻译(纯数据 `machine.json` + 引擎/观察合一的 `machine-runtime`,`main` 演示用法)。常见映射:
 
 | 场景 | 语言 |
 |------|------|
@@ -61,7 +61,7 @@ description: >
 
 2. **转移引擎 = 纯查表。** 只做:查表 → 换当前状态 → 把结果交给 log。**不含任何业务副作用。**
 
-3. **log 层 = 全部观察逻辑。** 单行转移日志 + `render()` 状态图。`history` 是实例私有的,存在 log 内部。
+3. **观察逻辑 = 全部集中在 log。** 单行转移日志 + `render()` 状态图。`history` 是实例私有的,存在 log 内部。log 与转移引擎**放在同一个 `machine-runtime` 文件里**(引擎调它,但业务代码不碰)——这样引擎只需一个文件,观察逻辑仍与业务/数据隔离。
 
 4. **无 onEnter,副作用留在调用处。** 进入状态不自动触发任何动作。副作用由调用方在 `transition()` 返回后、在调用点自己执行 —— 这样控制流一眼可见,不会有隐藏的连锁反应。
 
@@ -73,7 +73,7 @@ description: >
 
 ## 第 3 步:render() —— 完整 ASCII 状态图
 
-这是长期可读性的核心卖点,**必须真正实现**,不能留空。规范(实现以 `references/log.ts` 的 `render()` 为准):
+这是长期可读性的核心卖点,**必须真正实现**,不能留空。规范(实现以 `references/machine-runtime.ts` 里的 `render()` 为准):
 
 每次转移后,打印整张图,每个状态一块:
 

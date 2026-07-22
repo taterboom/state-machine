@@ -10,7 +10,7 @@ The pattern is three layers:
 
 Side effects live at the call site (no `onEnter`), so control flow stays visible. The skill also gates itself: if your script is a linear pipeline (`fetch → parse → transform → write`), it tells you to just write plain functions instead of forcing a state machine.
 
-The reference lives in [`skills/state-machine/references/`](skills/state-machine/references/) as four files — `machine.json` (pure-data definition), `machine-runtime.ts` (transition engine), `log.ts` (observation + `render()`), `main.ts` (usage). It's a **shape reference**, not a mandate to use TypeScript: the machine definition is always **pure data in a separate `machine.json`**, and the skill picks the language that best fits your project (Python, TS/JS, Go, Bash…) while keeping the design contract intact.
+The reference lives in [`skills/state-machine/references/`](skills/state-machine/references/) — just two engine files plus a usage example: `machine.json` (pure-data definition), `machine-runtime.ts` (transition engine + observation/`render()` merged), and `main.ts` (drop-in usage). It's a **shape reference**, not a mandate to use TypeScript: the machine definition is always **pure data in a separate `machine.json`**, and the skill picks the language that best fits your project (Python, TS/JS, Go, Bash…) while keeping the design contract intact.
 
 ## Install
 
