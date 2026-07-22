@@ -1,0 +1,19 @@
+{
+  "name": "state-machine",
+  "version": "1.0.0",
+  "description": "A Claude Code skill: structure small scripts (scrapers, data pipelines, job pollers, retry loops) as a tiny declarative state machine with a live ASCII state diagram, so they stay readable months later.",
+  "scripts": {
+    "build": "mkdir -p dist && zip -r dist/state-machine.zip skills/state-machine/"
+  },
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/taterboom/state-machine.git"
+  },
+  "keywords": ["claude", "skill", "state-machine", "fsm", "scraper", "script"],
+  "author": "taterboom",
+  "license": "MIT",
+  "bugs": {
+    "url": "https://github.com/taterboom/state-machine/issues"
+  },
+  "homepage": "https://github.com/taterboom/state-machine#readme"
+}
