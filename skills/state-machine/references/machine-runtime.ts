@@ -7,7 +7,7 @@
 // 只需要「一个 machine.json + 这一个 machine-runtime」,main 里直接用:
 //   · createMachine —— 调用方直接说去哪个状态,引擎只校验这步合不合法
 //   · createLog(内部)—— 全部观察逻辑:单行日志 + render 状态图
-// 约定:调用方直接指定目标状态 to(target),决策在调用处;
+// 约定:调用方直接指定目标状态 transition(target),决策在调用处;
 //       进入状态不触发任何动作(无 onEnter),副作用由调用方自行执行。
 // ============================================================
 
@@ -19,7 +19,7 @@ export function createMachine(definition, name = 'machine') {
   let current = definition.initial
   const log = createLog(definition, name) // history 在 log 内部,实例私有
 
-  function to(target, payload) {
+  function transition(target, payload) {
     const prev = current
     const allowed = definition.states[prev]?.includes(target)
 
@@ -43,7 +43,7 @@ export function createMachine(definition, name = 'machine') {
   }
 
   return {
-    to,
+    transition,
     get state() {
       return current
     },
