@@ -27,8 +27,8 @@ description: >
 
 只有满足**至少一条**才用状态机:
 
-- 有**重试 / 回边**:`failed → RETRY → creating …`
-- 有**轮询 / 等待**:`waiting → SUCCESS / FAILURE`
+- 有**重试 / 回边**:`failed → creating`(跳回去重来)
+- 有**轮询 / 等待**:`waiting → success / failed`
 - 有**多出口 / 失败恢复**的分支
 - 状态之间会**来回跳**,而不是一条道走到底
 
@@ -57,15 +57,15 @@ description: >
 
 无论用什么语言,这五条必须守住 —— 它们是可读性的来源:
 
-1. **machine 定义 = 纯数据,存成独立文件。** 只有「状态有哪些」「什么事件到哪个状态」。优先放进**独立的 `machine.json`**(或对应语言的纯数据文件:Python 可用单独的 dict 模块、Go 用 map、Bash 用关联数组)。**不要把它内联进代码逻辑里** —— 数据与引擎分离,才能一眼看懂脚本有哪些状态、怎么跳。
+1. **machine 定义 = 纯数据(邻接白名单),存成独立文件。** 只列「每个状态能合法跳到哪些状态」(`{ state: [目标状态...] }`)。优先放进**独立的 `machine.json`**(或对应语言的纯数据文件:Python 可用单独的 dict 模块、Go 用 map、Bash 用关联数组)。**不要把它内联进代码逻辑里** —— 数据与引擎分离,才能一眼看懂脚本有哪些状态、怎么跳。
 
-2. **转移引擎 = 纯查表。** 只做:查表 → 换当前状态 → 把结果交给 log。**不含任何业务副作用。**
+2. **转移引擎 = 纯校验,决策在调用处。** 调用方直接指定目标状态 `to(target)`,引擎只做:查白名单 → 合法就换状态 → 交给 log。**状态机不替你决定去哪**(没有事件层、没有 `onEnter` 里的隐藏分支),它只回答「这一步合不合法」。不含任何业务副作用。
 
 3. **观察逻辑 = 全部集中在 log。** 单行转移日志 + `render()` 状态图。`history` 是实例私有的,存在 log 内部。log 与转移引擎**放在同一个 `machine-runtime` 文件里**(引擎调它,但业务代码不碰)——这样引擎只需一个文件,观察逻辑仍与业务/数据隔离。
 
 4. **无 onEnter,副作用留在调用处。** 进入状态不自动触发任何动作。副作用由调用方在 `transition()` 返回后、在调用点自己执行 —— 这样控制流一眼可见,不会有隐藏的连锁反应。
 
-5. **无效转移也返回完整 result,统一用 `accepted` 判断。** 非法事件不抛异常、不静默,而是返回 `accepted: false` 的完整结果,交给 log 记一条 invalid。调用方只有这一条错误通道。
+5. **非法跳转也返回完整 result,统一用 `accepted` 判断。** 跳到不在白名单里的状态时不抛异常、不静默,而是返回 `accepted: false` 的完整结果,交给 log 记一条 invalid。调用方只有这一条错误通道。
 
 多实例互不干扰(每次 create 独立持有自己的 current + history)。
 
@@ -81,22 +81,22 @@ description: >
 - **走过的**状态/边 → **绿色**;
 - **当前状态的出边**(下一步可走)→ 正常亮度;
 - 其余(没走过、当前走不到)→ **变暗**。
-- 每个状态列出它的出边:`├─ EVENT ────▶ target`(箭头对齐)。
+- 每个状态列出它在白名单里的出边:`├─▶ target`。
 - 末尾一行轨迹:`trail: idle → creating → waiting`。
 
 效果示意(当前在 `waiting`):
 
 ```
-○ idle  [initial]        ← 绿(走过)
-  └─ CREATE ────▶ creating
+○ idle  [initial]     ← 绿(走过)
+  └─▶ creating
 
-○ creating               ← 绿(走过)
-  ├─ CREATED ───▶ waiting
-  └─ FAILURE ───▶ failed  ← 暗(没走这条)
+○ creating            ← 绿(走过)
+  ├─▶ waiting
+  └─▶ failed          ← 暗(没走这条)
 
-● waiting                ← 加粗(当前)
-  ├─ SUCCESS ───▶ success ← 正常亮度(可走)
-  └─ FAILURE ───▶ failed
+● waiting             ← 加粗(当前)
+  ├─▶ success         ← 正常亮度(可走)
+  └─▶ failed
 
 ...(failed / success 整块变暗)
 
@@ -109,11 +109,11 @@ trail: idle → creating → waiting
 
 ## 第 4 步:调用处接副作用
 
-生成脚手架后,在 `main` 里演示用法:每次 `transition()` 后,用 `if (m.state === '…')` 在调用点写副作用。控制流全部显式可见,没有藏在状态机内部的动作。
+生成脚手架后,在 `main` 里演示用法:每次 `to()` 后,用 `if (m.state === '…')` 在调用点写副作用。控制流全部显式可见,没有藏在状态机内部的动作。
 
 ```
-const r = m.transition('CREATE', payload)
-if (!r.accepted) { /* 唯一的错误处理通道 */ }
+const r = m.to('creating', payload)
+if (!r.accepted) { /* 唯一的错误处理通道(非法跳转) */ }
 if (m.state === 'creating') { /* doCreate() ... */ }
 ```
 
@@ -122,5 +122,5 @@ if (m.state === 'creating') { /* doCreate() ... */ }
 ## 验证
 
 - 跑一遍 `main` 段(编译/直接执行),肉眼确认 ASCII 图的「绿/加粗/暗 + trail」符合规范。
-- 触发一次非法事件,确认走 invalid 通道、不崩。
+- 触发一次非法跳转(跳到不在白名单里的状态),确认走 invalid 通道、不崩。
 - 对照判断闸门再确认一次:这个脚本确实有真状态,而不是被硬套的线性管道。

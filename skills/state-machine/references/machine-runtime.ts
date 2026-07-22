@@ -5,30 +5,30 @@
 //    请按用户项目/需求选最合适的语言翻译,契约见 SKILL.md。
 //
 // 只需要「一个 machine.json + 这一个 machine-runtime」,main 里直接用:
-//   · createMachine —— 纯转移引擎:查表 → 换状态 → 交给 log
+//   · createMachine —— 调用方直接说去哪个状态,引擎只校验这步合不合法
 //   · createLog(内部)—— 全部观察逻辑:单行日志 + render 状态图
-// 约定:进入状态不触发任何动作(无 onEnter),
-//       副作用由调用方在 transition 返回后自行执行。
+// 约定:调用方直接指定目标状态 to(target),决策在调用处;
+//       进入状态不触发任何动作(无 onEnter),副作用由调用方自行执行。
 // ============================================================
 
 
 // ------------------------------------------------------------
-// 转移引擎
+// 转移引擎 —— 纯校验:查白名单 → 合法就换状态 → 交给 log
 // ------------------------------------------------------------
 export function createMachine(definition, name = 'machine') {
   let current = definition.initial
   const log = createLog(definition, name) // history 在 log 内部,实例私有
 
-  function transition(event, payload) {
+  function to(target, payload) {
     const prev = current
-    const next = definition.states[prev]?.[event]
+    const allowed = definition.states[prev]?.includes(target)
 
-    // 无效转移也返回完整 result,调用方统一判断 accepted
+    // 非法跳转也返回完整 result,调用方统一判断 accepted
     const result = {
-      accepted: Boolean(next),
+      accepted: Boolean(allowed),
       prev,
-      current: next ?? prev,
-      event,
+      current: allowed ? target : prev,
+      target,
       payload,
     }
 
@@ -37,13 +37,13 @@ export function createMachine(definition, name = 'machine') {
       return result
     }
 
-    current = next
+    current = target
     log.transition(result)
     return result
   }
 
   return {
-    transition,
+    to,
     get state() {
       return current
     },
@@ -66,15 +66,13 @@ function createLog(machine, name) {
 
   function transition(result) {
     history.push(result)
-    console.log(
-      `${C.dim}[${name}]${C.reset} ${result.prev} --${result.event}--> ${result.current}`,
-    )
+    console.log(`${C.dim}[${name}]${C.reset} ${result.prev} → ${result.current}`)
     render(result.current)
   }
 
   function invalid(result) {
     console.warn(
-      `${C.dim}[${name}]${C.reset} ${C.bold}Invalid${C.reset}: ${result.prev} --${result.event}--> ?`,
+      `${C.dim}[${name}]${C.reset} ${C.bold}Invalid${C.reset}: ${result.prev} ⇥ ${result.target}`,
     )
   }
 
@@ -82,7 +80,7 @@ function createLog(machine, name) {
   //   ● 当前状态        加粗
   //   ○ 走过的状态      绿色
   //   ○ 其余状态        变暗
-  //   ├─ EVENT ▶ target 走过的边=绿、当前可走的边=正常、其余=暗
+  //   ├─▶ target        走过的边=绿、当前可走的边=正常、其余=暗
   //   trail: a → b → c
   function render(currentState) {
     // 从 history 推导:走过哪些状态、走过哪些边(不另存一份状态)
@@ -91,13 +89,12 @@ function createLog(machine, name) {
     for (const r of history) {
       visitedStates.add(r.prev)
       visitedStates.add(r.current)
-      takenEdges.add(`${r.prev}|${r.event}`)
+      takenEdges.add(`${r.prev}|${r.current}`)
     }
 
-    const ARROW_COL = 14 // 事件名 + 连字符 对齐到此列
     const lines = ['']
 
-    for (const [state, edges] of Object.entries(machine.states)) {
+    for (const [state, targets] of Object.entries(machine.states)) {
       const isCurrent = state === currentState
       const isVisited = visitedStates.has(state)
       const marker = isCurrent ? '●' : '○'
@@ -107,14 +104,12 @@ function createLog(machine, name) {
       const headStyle = isCurrent ? C.bold : isVisited ? C.green : C.dim
       lines.push(`${headStyle}${marker} ${state}${tag}${C.reset}`)
 
-      // 出边
-      const entries = Object.entries(edges)
-      entries.forEach(([event, target], i) => {
-        const connector = i === entries.length - 1 ? '└─' : '├─'
-        const dashes = '─'.repeat(Math.max(3, ARROW_COL - event.length))
-        const raw = `${connector} ${event} ${dashes}▶ ${target}`
+      // 出边(邻接白名单里的可达状态)
+      targets.forEach((target, i) => {
+        const connector = i === targets.length - 1 ? '└─▶' : '├─▶'
+        const raw = `${connector} ${target}`
 
-        const taken = takenEdges.has(`${state}|${event}`)
+        const taken = takenEdges.has(`${state}|${target}`)
         const available = isCurrent // 当前状态的出边=下一步可走
         const edgeStyle = taken ? C.green : available ? C.reset : C.dim
         lines.push(`  ${edgeStyle}${raw}${C.reset}`)
