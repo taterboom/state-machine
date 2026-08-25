@@ -29,15 +29,20 @@ export function createMachine(definition, name = 'machine') {
   return instantiate(model, name, model.initial)
 }
 
+// 所有对普通对象的键查找都必须走 own-property 检查:
+// {} 继承 Object.prototype,否则 transition('constructor') 会把原型上的
+// 函数当成合法落点(accepted=true、current 变成函数、渲染层崩溃)
+const own = (obj, key) => (obj && Object.hasOwn(obj, key) ? obj[key] : undefined)
+
 // 实例:current + history 各自私有;model(编译产物)在实例间共享——编译一次,实例多次
 function instantiate(model, name, startAt) {
-  if (!model.edges[startAt]) throw new Error(`machine: 找不到起点状态 "${startAt}"`)
+  if (!own(model.edges, startAt)) throw new Error(`machine: 找不到起点状态 "${startAt}"`)
   let current = startAt
   const log = createLog(model, name, startAt) // history 在 log 内部,实例私有
 
   function transition(event, payload?) {
     const prev = current
-    const target = model.edges[prev]?.[event]
+    const target = own(own(model.edges, prev), event)
 
     // 非法事件也返回完整 result,调用方统一判断 accepted
     const result = {
@@ -60,7 +65,7 @@ function instantiate(model, name, startAt) {
 
   return {
     transition,
-    can: (event) => Boolean(model.edges[current]?.[event]), // 供 action 的 guard 引用
+    can: (event) => Boolean(own(own(model.edges, current), event)), // 供 action 的 guard 引用
     get state() {
       return current
     },
@@ -91,7 +96,7 @@ function compile(definition) {
   // 目标名先在同级找,再逐层向外;找不到 = 定义写错,启动即报错
   function resolveTarget(targetName, scopes) {
     for (let i = scopes.length - 1; i >= 0; i--) {
-      const node = scopes[i].states[targetName]
+      const node = own(scopes[i].states, targetName) // own-property:防原型键
       if (node) {
         const base = scopes[i].prefix
         return enterInitial(base ? `${base}.${targetName}` : targetName, node)

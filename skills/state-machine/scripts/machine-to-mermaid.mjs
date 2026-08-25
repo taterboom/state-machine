@@ -17,14 +17,22 @@
 import { readFileSync } from 'node:fs'
 
 export function toMermaid(definition) {
-  const id = (path) => path.replaceAll('.', '_') // mermaid 的节点 id 不能带点
+  // 内部 ID:每个完整路径分配 s0/s1/…。不能用 replaceAll('.','_'):
+  // 那不是一一映射(顶层状态 a_b 会与嵌套状态 a.b 碰撞成同一节点),
+  // 且状态名含空格/特殊字符时会产出非法 id。显示名用 mermaid alias 保留。
+  const ids = new Map()
+  const id = (path) => {
+    if (!ids.has(path)) ids.set(path, `s${ids.size}`)
+    return ids.get(path)
+  }
   const decls = []
   const edges = []
 
-  // 同引擎的解析规则:目标名先在同级找,再逐层向外(指向书写目标:群指向群)
+  // 同引擎的解析规则:目标名先在同级找,再逐层向外(指向书写目标:群指向群)。
+  // own-property 检查:普通对象继承 Object.prototype,防原型键误命中
   function resolvePath(targetName, scopes) {
     for (let i = scopes.length - 1; i >= 0; i--) {
-      if (scopes[i].states[targetName]) {
+      if (Object.hasOwn(scopes[i].states, targetName)) {
         const base = scopes[i].prefix
         return base ? `${base}.${targetName}` : targetName
       }
@@ -34,9 +42,6 @@ export function toMermaid(definition) {
 
   function walkStates(prefix, statesMap, initialName, scopes, indent) {
     const pad = '  '.repeat(indent)
-    if (initialName) {
-      decls.push(`${pad}[*] --> ${id(prefix ? `${prefix}.${initialName}` : initialName)}`)
-    }
     for (const [name, node] of Object.entries(statesMap)) {
       const path = prefix ? `${prefix}.${name}` : name
       for (const [event, t] of Object.entries(node.on ?? {})) {
@@ -46,9 +51,13 @@ export function toMermaid(definition) {
         decls.push(`${pad}state "${name}" as ${id(path)} {`)
         walkStates(path, node.states, node.initial, [...scopes, { prefix: path, states: node.states }], indent + 1)
         decls.push(`${pad}}`)
-      } else if (prefix) {
-        decls.push(`${pad}state "${name}" as ${id(path)}`) // 群内叶子:短名显示,全路径做 id
+      } else {
+        decls.push(`${pad}state "${name}" as ${id(path)}`) // 短名显示,seq 做 id
       }
+    }
+    // initial 箭头放在同级声明之后
+    if (initialName) {
+      decls.push(`${pad}[*] --> ${id(prefix ? `${prefix}.${initialName}` : initialName)}`)
     }
   }
 

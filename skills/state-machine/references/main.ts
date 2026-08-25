@@ -4,7 +4,10 @@
 // ⚠️ 跨语言参考:此文件是形态参考,不是要求用 TypeScript。
 // 分工:machine 答"这步合不合法"(transition(EVENT) 查白名单,事件有名字);
 //       action 就是一个 async 函数——顺序写业务,每步进展 commit 一个事件;
-//       guard 是可选的补充(函数开头早退),不写也安全:机器本身兜底。
+//       guard 是可选的补充(函数开头早退)。
+// ⚠️ 机器兜底只保「状态不会非法改变」,保不了「副作用不重复执行」——
+//    凡有副作用的 action,必须先确认拿到推进权(检查 transition 返回的
+//    accepted,或 can()),再执行副作用。
 // statechart 三件套在小脚本里的形态:
 //   hierarchy   = machine.json 里的 "working.*" 群边(子状态共享)
 //   concurrency = 每个并行区域一台 machine(job ∥ report),互不干扰
@@ -28,12 +31,18 @@ const fakeUpload = async () => true
 // —— actions:就是普通的 async 函数 ——
 
 async function submit(payload) {
-  job.transition('SUBMIT', payload)
+  // 先拿到状态推进权,再做副作用——被拒时(比如并发的第二次 submit)副作用不得发出
+  if (!job.transition('SUBMIT', payload).accepted) return
   const ok = await fakeCreate() // 副作用在函数里,控制流一眼可见
   job.transition(ok ? 'CREATED' : 'CREATE_FAILED') // 结果是显式事件,日志会讲故事
 }
 
 async function poll() {
+  // 副作用(轮询)之前先确认当前确实可轮询
+  if (!job.can('POLL_OK')) {
+    console.warn(`[job] poll 被拒(当前 ${job.state} 无结果可查)`)
+    return
+  }
   job.transition((await fakePoll()) ? 'POLL_OK' : 'POLL_FAIL')
 }
 
@@ -59,7 +68,8 @@ async function publish() {
     console.warn(`[report] publish 被拒(job 还在 ${job.state},未完成)`)
     return
   }
-  report.transition('UPLOAD')
+  // 占位转移被拒(比如已 published)就不再发起上传
+  if (!report.transition('UPLOAD').accepted) return
   report.transition((await fakeUpload()) ? 'UPLOAD_OK' : 'UPLOAD_FAIL')
 }
 
@@ -74,7 +84,8 @@ await retry() // RETRY: → working.creating → working.waiting(retries = 1)
 await poll() // POLL_OK: working.waiting → done
 await publish() // job 已 done → report: none → uploading → published
 
-// 不写 guard 也安全 —— 机器兜底:非法事件只会得到 accepted:false + Invalid 日志
+// 机器兜底(仅对状态):非法事件只会得到 accepted:false + Invalid 日志,
+// 状态不会被改坏;但副作用要靠上面 action 里的 accepted 检查自己守
 const r = job.transition('SUBMIT') // done 下没有 SUBMIT 这条边
 if (!r.accepted) {
   // 机器层唯一的错误通道

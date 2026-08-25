@@ -192,11 +192,14 @@ const ACTIONS: Record<string, ActionDef> = {
   // —— 恢复动作(宕机后重放同一次尝试;key 不变,stripe 幂等去重)——
   RESUME_CHARGE: {
     from: ['charging'],
-    async run(c) {
+    async run(c, now) {
+      // charging 占位可能发生在风控完成之前——恢复必须从风控边界起重放,
+      // 直接扣款会绕过风控。风控是只读查询可重复;扣款靠同 key 幂等去重
+      if (!(await riskService.check(c)).ok) return { to: 'pending', note: '恢复时风控拒绝' }
       await stripe.call('charge', chargeKey(c), c)
       return { to: 'processing' }
     },
-    outcomes: ['processing'],
+    outcomes: ['pending', 'processing'],
   },
   RESUME_REFUND: {
     from: ['refund_calling'],

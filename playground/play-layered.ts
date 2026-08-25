@@ -64,7 +64,8 @@ const GUARD_LABEL: Record<keyof typeof RULES, string> = {
 // ------------------------------------------------------------
 type Status =
   | 'pending'
-  | 'charging' // 扣款请求在途(in-flight,宕机恢复的落脚点)
+  | 'risk_checking' // 风控在途(检查点 1:恢复 = 重放风控)
+  | 'charging' // 扣款请求在途(检查点 2:恢复 = 同幂等键重放扣款)
   | 'waiting' // 已受理,等 webhook
   | 'pay_failed'
   | 'paid'
@@ -80,11 +81,16 @@ const machine: { initial: Status; states: Record<Status, Record<string, EdgeDef>
   initial: 'pending',
   states: {
     pending: {
-      PAY: { guard: 'notExpired', target: 'charging' },
+      PAY: { guard: 'notExpired', target: 'risk_checking' },
       CLOSE: { guard: 'isExpired', target: 'closed' },
     },
-    charging: {
+    // 一个状态不跨两个安全边界:risk_checking 与 charging 是两个恢复检查点,
+    // 否则宕机恢复会把"风控还没过"的行直接送去扣款(绕过风控)
+    risk_checking: {
       RISK_DENIED: { target: 'pending' }, // run 的结果是显式事件,不藏在返回值里
+      RISK_APPROVED: { target: 'charging' },
+    },
+    charging: {
       CHARGE_ACCEPTED: { target: 'waiting' },
       PSP_OK: { target: 'paid' }, // 早到的 webhook 也接得住
       PSP_FAIL: { target: 'pay_failed' },
@@ -182,6 +188,18 @@ async function chargeHalf(id: string, now: number) {
   await stripe.call('charge', chargeKey(c), c)
   commit(id, 'CHARGE_ACCEPTED', now)
 }
+// 风控 → 占位到 charging(检查点 2,此时才计新尝试)→ 扣款。
+// 风控是只读查询,宕机后可安全重放;扣款靠同幂等键去重
+async function riskThenCharge(id: string, now: number) {
+  if (!(await riskService.check(db.find(id))).ok) {
+    commit(id, 'RISK_DENIED', now) // 结果是显式事件,进审计日志
+    console.log(`   ✗ 403 ${id} pay:风控拒绝`)
+    return
+  }
+  const row = db.find(id)
+  if (!commit(id, 'RISK_APPROVED', now, { attempts: row.attempts + 1 })) return
+  await chargeHalf(id, now)
+}
 async function refundHalf(id: string, now: number) {
   const c = db.find(id)
   await stripe.call('refund', refundKey(c), c)
@@ -192,14 +210,8 @@ const actions: Record<string, ActionDef> = {
   pay: {
     guard: (row, now) => canFire(row, 'PAY', now), // isPayable:单源,直接给前端
     async run(id, now) {
-      const row = db.find(id)
-      if (!commit(id, 'PAY', now, { attempts: row.attempts + 1 })) return // mutation:占位 + 计新尝试
-      if (!(await riskService.check(db.find(id))).ok) {
-        commit(id, 'RISK_DENIED', now) // 结果是显式事件,进审计日志
-        console.log(`   ✗ 403 ${id} pay:风控拒绝`)
-        return
-      }
-      await chargeHalf(id, now)
+      if (!commit(id, 'PAY', now)) return // mutation:占位到 risk_checking(检查点 1)
+      await riskThenCharge(id, now)
     },
   },
   retry: {
@@ -232,8 +244,16 @@ const actions: Record<string, ActionDef> = {
       await refundHalf(id, now)
     },
   },
-  // 恢复也是 action:重放 in-flight 的后半程(同 key,stripe 幂等去重)
+  // 恢复也是 action:按检查点分别重放
+  resume_risk: {
+    // 死在风控在途:从风控起重放(只读查询可重复),绝不直接扣款
+    guard: (row) => (row.status === 'risk_checking' ? true : `状态 ${row.status} 无需恢复风控`),
+    async run(id, now) {
+      await riskThenCharge(id, now)
+    },
+  },
   resume_charge: {
+    // 死在扣款在途:风控已过,同幂等键重放扣款(stripe 去重)
     guard: (row) => (row.status === 'charging' ? true : `状态 ${row.status} 无需恢复扣款`),
     async run(id, now) {
       await chargeHalf(id, now)
@@ -333,10 +353,14 @@ async function timeoutCloseJob(now: number, name = 'robot') {
 }
 
 async function recoverInFlightJob(now: number, name = 'recovery') {
-  const stuck = db.select(['charging', 'refund_calling'], () => true)
+  const stuck = db.select(['risk_checking', 'charging', 'refund_calling'], () => true)
   console.log(`\n🛠 ${name} 扫描 in-flight 行 → [${stuck.map((r) => r.id).join(', ') || '空'}]`)
-  for (const row of stuck)
-    await api(row.id, row.status === 'charging' ? 'resume_charge' : 'resume_refund', now)
+  const RESUME_OF: Record<string, string> = {
+    risk_checking: 'resume_risk',
+    charging: 'resume_charge',
+    refund_calling: 'resume_refund',
+  }
+  for (const row of stuck) await api(row.id, RESUME_OF[row.status], now)
 }
 
 function renderGraph() {
@@ -394,8 +418,9 @@ show('inv_3', NOW)
 h('③ 宕机恢复:占位 + 扣款已发出,进程挂;恢复 action 重放后半程,幂等命中')
 createInvoice('inv_4', 9800, 30 * MIN)
 {
+  commit('inv_4', 'PAY', NOW) // 检查点 1:risk_checking
   const row = db.find('inv_4')
-  commit('inv_4', 'PAY', NOW, { attempts: row.attempts + 1 }) // 占位成功……
+  commit('inv_4', 'RISK_APPROVED', NOW, { attempts: row.attempts + 1 }) // 检查点 2:charging
   await stripe.call('charge', chargeKey(db.find('inv_4')), db.find('inv_4'))
   console.log('   💥 宕机:CHARGE_ACCEPTED 没提交,行停在 charging')
 }

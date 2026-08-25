@@ -102,13 +102,13 @@ statechart 三件套在小脚本里的形态:
 
 2. **transition(EVENT) 是唯一改状态的口(mutation),嵌套在编译期消化。** 调用方说"发生了什么",落点由定义决定——**问"发生了什么",不问"去哪"**。`createMachine` 启动时把嵌套编译成「叶子状态 → { EVENT: 叶子落点 }」的平铺表:target 名先在同级找、再逐层向外;落到群则沿 `initial` 进入叶子;子状态的边优先、群边兜底;找不到的 target 启动即报错。运行时只查表,不含任何业务副作用。同时暴露 `can(EVENT)` 供 guard 引用。
 
-3. **action 是概念,不是 API:一个操作 = 一个普通 async 函数。** 从上到下顺序写业务,每步进展 commit 一个事件。guard 是**可选的补充**——函数开头的一个早退判断(`m.can(EVENT)` + 业务条件如重试次数;跨区域条件就是读另一台机器的 state),用于优雅拒绝;不写 guard 也安全,机器本身兜底(见第 6 条)。**不要为 actions 造框架**(不需要 dispatcher / 注册表)。
+3. **action 是概念,不是 API:一个操作 = 一个普通 async 函数。** 从上到下顺序写业务,每步进展 commit 一个事件。guard 是**可选的补充**——函数开头的一个早退判断(`m.can(EVENT)` + 业务条件如重试次数;跨区域条件就是读另一台机器的 state),用于优雅拒绝;不写 guard,机器也会兜底拒绝非法状态变更(见第 6 条)。**但兜底只保状态,不保副作用**——机器能拒绝状态变更,拒绝不了已发出的副作用:凡有副作用的 action,必须先确认拿到推进权(检查占位转移的 `accepted`,或 `can()`),再执行副作用。**不要为 actions 造框架**(不需要 dispatcher / 注册表)。
 
 4. **观察逻辑 = 全部集中在 log。** 单行转移日志(带事件名:`SUBMIT: idle → working.creating`)+ `render()` 状态图。`history` 是实例私有的,存在 log 内部。log 与编译、转移引擎**放在同一个 `machine-runtime` 文件里**——引擎只需一个文件,观察逻辑仍与业务/数据隔离。观察层**不得向业务调用处索取参数**(实例名 / 日志 tag 之类必须可省略、有默认值)——写 action 的人不该感知日志。
 
 5. **机器无 onEnter,副作用全在 action 函数里。** 进入状态不自动触发任何动作,不会有隐藏的连锁反应——控制流在函数里一眼可见。
 
-6. **非法事件也返回完整 result,统一用 `accepted` 判断。** 当前状态下没有这条边时不抛异常、不静默,而是返回 `accepted: false` 的完整结果,交给 log 记一条 Invalid。机器层只有这一条错误通道——这就是"不写 guard 也安全"的底气。
+6. **非法事件也返回完整 result,统一用 `accepted` 判断。** 当前状态下没有这条边时不抛异常、不静默,而是返回 `accepted: false` 的完整结果,交给 log 记一条 Invalid。机器层只有这一条错误通道。注意:它保证的是**状态不会非法改变**,不是副作用不重复——副作用永远放在确认 `accepted` 之后(见第 3 条)。
 
 **并行区域(concurrency)= 每个区域一台 machine、一个独立 json**,每台各自持有 current + history,互不干扰;多实例同理。
 
@@ -169,14 +169,18 @@ node <skill>/scripts/machine-to-mermaid.mjs path/to/machine.json
 
 ```
 stateDiagram-v2
-  [*] --> idle
-  state "working" as working {
-    [*] --> working_creating
+  state "idle" as s0
+  state "working" as s1 {
+    state "creating" as s2
     ...
+    [*] --> s2
   }
-  idle --> working : SUBMIT
-  working --> idle : CANCEL
+  [*] --> s0
+  s0 --> s1 : SUBMIT
+  s1 --> s0 : CANCEL
 ```
+
+(节点 id 用 s0/s1… 序号、显示名走 alias——路径直接替换成 id 不是一一映射,`a_b` 与 `a.b` 会碰撞,且状态名含特殊字符时会产出非法 id。)
 
 ---
 
@@ -189,7 +193,8 @@ const job = createMachine(machine, 'job')
 const report = createMachine(reportMachine, 'report') // 并行区域 = 再开一台
 
 async function submit(payload) {
-  job.transition('SUBMIT', payload)                  // → working.creating(进群落到 initial)
+  // 先拿到推进权再做副作用(被拒时副作用不得发出)→ working.creating(进群落到 initial)
+  if (!job.transition('SUBMIT', payload).accepted) return
   const ok = await doCreate()                        // 副作用在函数里,控制流一眼可见
   job.transition(ok ? 'CREATED' : 'CREATE_FAILED')   // 结果是显式事件
 }
@@ -215,8 +220,9 @@ async function publish() {
 - **`resolveState(persistedState)`**(名字取自 xstate)把持久化状态解析回机器,trail 从解析点开始。
 - **编译一次,实例多次**:machine(编译产物)进程内共享,每次请求 `spawn` / `resolveState` 一个实例;禁止每请求重新解析定义。
 - **action = 端点 / 用例函数**,形状固定:
-  `resolveState(状态) → can(EVENT) guard(拒绝时走该端点原有的错误码)→ 副作用 → transition(EVENT) → 用落点 result.current 驱动持久化`
+  `resolveState(状态) → can(EVENT) guard(拒绝时走该端点原有的错误码)→ CAS 占位(UPDATE ... WHERE version = 旧值,抢到执行权)→ 副作用(确定性幂等键)→ transition(EVENT) → 用落点 result.current CAS 写回`
   ——不手写目标状态,落点由定义决定。
+- **多写者铁律:`can` 通过 ≠ 拿到执行权。** 两个请求会同时读到同一版本、同时过 can、同时执行副作用——进程内的机器只能拒绝状态变更,拒绝不了已发出的副作用。所以副作用之前必须先用数据库 version CAS 占位(`affected = 1` 者才许调外部服务),副作用本身用确定性幂等键防重放;CAS 管执行权、幂等键管重复 RPC,两者不能互相替代。完整示例见仓库 `playground/play-layered.ts`。
 - **反模式:在通用的 `update(target)` 持久化层做 (prev, target) 反查白名单。** 那是"问去哪":持久化层只知道目标不知道事件,guard 必须放在知道"发生了什么"的层(端点/用例)。
 
 ## xstate 对照表(翻译到其他语言时抄经典命名)
@@ -246,6 +252,7 @@ async function publish() {
 - 确认进群事件落到群的 `initial`(如 `SUBMIT: idle → working.creating`)。
 - 触发一次**群边**(如在群内任意子状态 CANCEL),确认落点正确、群行的边变绿。
 - 触发一次非法事件(当前状态下没有这条边),确认走 Invalid 通道、不崩。
+- 检查每个有副作用的 action:副作用必须在 `accepted` / `can()` 确认**之后**执行(转移被拒时副作用不得发出)。
 - 若有并行区域:确认两台机器各自渲染、互不干扰,跨区域 guard 生效。
 - 跑一次 `scripts/machine-to-mermaid.mjs`,输出粘进 mermaid 渲染器(或 markdown 预览)确认可渲染、群与边完整。
 - 持久化场景:`resolveState` 后 trail 从解析点开始;action 用落点驱动持久化,没有手写的目标状态。

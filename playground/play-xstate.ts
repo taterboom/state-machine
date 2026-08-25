@@ -366,7 +366,13 @@ async function handleEvent(id: string, type: Ev['type'], now: number) {
   // ④ 稳定态写回(从占位后的 version 继续 CAS)。这一步之前进程挂了,
   //    行会停在 in-flight 状态 —— 由恢复任务兜底(见 recoverInFlightJob)
   if (statusOf(settled) !== statusOf(claimed)) {
-    db.cas(id, { expectedVersion: row.version + 1, to: statusOf(settled), ctx: settled.context })
+    // CAS 可能失败:等 RPC 期间行可能已被恢复任务/其他请求推进——
+    // 内存里 actor 的状态不是数据库事实,必须以 affected 为准
+    const affected = db.cas(id, { expectedVersion: row.version + 1, to: statusOf(settled), ctx: settled.context })
+    if (affected === 0) {
+      console.log(`   ⚠ ${id} 稳定态写回失败(CAS affected=0):行已被其他处理器推进`)
+      return
+    }
     console.log(`   ✓ ${id} 稳定于:${statusOf(settled)}`)
   }
   if (type === 'PAY' && settled.matches('pending')) console.log(`   ✗ 403 ${id} PAY:风控拒绝,退回 pending`)

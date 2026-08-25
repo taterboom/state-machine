@@ -140,8 +140,10 @@ const machine: { id: string; states: Record<string, StateDef> } = {
       },
       states: {
         charging: {
-          // 宕机恢复:重放同一次尝试(key 不变),只有 charging 里才有这条边
-          on: { RESUME: { target: ['processing.waiting'], run: chargeCore } },
+          // 宕机恢复:重放同一次尝试(key 不变)。charging 占位可能发生在
+          // 风控完成之前,所以恢复走完整的 payCore(风控 → 扣款),
+          // 直接调 chargeCore 会绕过风控;扣款靠同 key 幂等去重
+          on: { RESUME: { target: ['processing.waiting', 'pending'], run: payCore } },
         },
         waiting: {}, // 等 webhook,出口全在父级
       },
