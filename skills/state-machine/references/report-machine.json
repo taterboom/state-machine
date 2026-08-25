@@ -1,0 +1,8 @@
+{
+  "initial": "none",
+  "states": {
+    "none": { "on": { "UPLOAD": "uploading" } },
+    "uploading": { "on": { "UPLOAD_OK": "published", "UPLOAD_FAIL": "none" } },
+    "published": {}
+  }
+}
