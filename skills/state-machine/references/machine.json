@@ -1,10 +1,16 @@
 {
   "initial": "idle",
   "states": {
-    "idle":     ["creating"],
-    "creating": ["waiting", "failed"],
-    "waiting":  ["success", "failed"],
-    "failed":   ["creating", "idle"],
-    "success":  ["idle"]
+    "idle": { "on": { "SUBMIT": "working" } },
+    "working": {
+      "initial": "creating",
+      "on": { "CANCEL": "idle" },
+      "states": {
+        "creating": { "on": { "CREATED": "waiting", "CREATE_FAILED": "failed" } },
+        "waiting": { "on": { "POLL_OK": "done", "POLL_FAIL": "failed" } },
+        "failed": { "on": { "RETRY": "creating" } }
+      }
+    },
+    "done": {}
   }
 }
