@@ -10,18 +10,18 @@ The pattern is three layers:
 
 Side effects live at the call site (no `onEnter`), so control flow stays visible. The skill also gates itself: if your script is a linear pipeline (`fetch → parse → transform → write`), it tells you to just write plain functions instead of forcing a state machine.
 
-The reference lives in [`skills/state-machine/references/`](skills/state-machine/references/) — just two engine files plus a usage example: `machine.json` (pure-data definition), `machine-runtime.ts` (transition engine + observation/`render()` merged), and `main.ts` (drop-in usage). It's a **shape reference**, not a mandate to use TypeScript: the machine definition is always **pure data in a separate `machine.json`**, and the skill picks the language that best fits your project (Python, TS/JS, Go, Bash…) while keeping the design contract intact.
+The skill itself now lives in [taterboom/ai-nichijyou](https://github.com/taterboom/ai-nichijyou/tree/main/skills/state-machine); this repo keeps the article and the playground. The reference lives in [`skills/state-machine/references/`](https://github.com/taterboom/ai-nichijyou/tree/main/skills/state-machine/references) — just two engine files plus a usage example: `machine.json` (pure-data definition), `machine-runtime.ts` (transition engine + observation/`render()` merged), and `main.ts` (drop-in usage). It's a **shape reference**, not a mandate to use TypeScript: the machine definition is always **pure data in a separate `machine.json`**, and the skill picks the language that best fits your project (Python, TS/JS, Go, Bash…) while keeping the design contract intact.
 
 ## Install
 
 ```
-npx skills add taterboom/state-machine
+npx skills add taterboom/ai-nichijyou -s state-machine
 ```
 
 Add `-g -y` to install globally (user-level) without prompts:
 
 ```
-npx skills add taterboom/state-machine -g -y
+npx skills add taterboom/ai-nichijyou -s state-machine -g -y
 ```
 
 ## License
